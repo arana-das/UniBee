@@ -1,5 +1,6 @@
 
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+
 import {
   CalendarDays,
   MapPin,
@@ -20,133 +21,71 @@ import {
   Mic2,
   Trophy,
   HeartHandshake,
+  AlertCircle,
+  RefreshCw,
+  Loader2,
 } from "lucide-react";
 
-// Frontend demonstration data.
-// Events and registrations will later come from MongoDB.
+import { getAuthToken } from "../services/authApi";
 
-const events = [
-  {
-    id: 1,
-    title: "University Tech Carnival 2026",
-    category: "Technology",
-    date: "2026-11-05",
-    time: "10:00 AM",
-    location: "University Auditorium",
-    organizer: "ICT Club",
-    capacity: 250,
-    registered: 178,
-    description:
-      "Join an exciting technology carnival featuring project exhibitions, programming contests, robotics demonstrations, and innovation showcases.",
-    highlights: [
-      "Project exhibitions",
-      "Programming contests",
-      "Networking opportunities",
-    ],
-    icon: Code2,
-    color: "#EAF2E8",
-  },
-  {
-    id: 2,
-    title: "Research & Innovation Workshop",
-    category: "Academic",
-    date: "2026-11-12",
-    time: "11:00 AM",
-    location: "Seminar Hall",
-    organizer: "Research Society",
-    capacity: 100,
-    registered: 65,
-    description:
-      "An interactive workshop introducing research methodologies, academic writing, literature reviews, and innovative project development.",
-    highlights: [
-      "Research methodology",
-      "Academic writing",
-      "Faculty mentoring",
-    ],
+// ========================================
+// API CONFIGURATION
+// ========================================
+
+const API = (
+  import.meta.env.VITE_API_URL || "http://localhost:5000"
+).replace(/\/+$/, "");
+
+// Events and registrations come from MongoDB.
+// Saved events and club demo actions remain
+// browser-local.
+
+const SAVED_KEY = "unibee-student-saved-events-v2";
+
+// ========================================
+// EVENT CATEGORY STYLES
+// ========================================
+
+const EVENT_STYLES = {
+  Academic: {
     icon: GraduationCap,
     color: "#EAF0F8",
   },
-  {
-    id: 3,
-    title: "Campus Cultural Festival",
-    category: "Cultural",
-    date: "2026-11-18",
-    time: "03:00 PM",
-    location: "Central Field",
-    organizer: "Cultural Club",
-    capacity: 500,
-    registered: 320,
-    description:
-      "Celebrate creativity and cultural diversity through music, dance, drama, art exhibitions, and student performances.",
-    highlights: [
-      "Live performances",
-      "Art exhibitions",
-      "Cultural activities",
-    ],
-    icon: Palette,
-    color: "#FFF4DC",
+  Workshop: {
+    icon: Code2,
+    color: "#EAF2E8",
   },
-  {
-    id: 4,
-    title: "Interdepartmental Sports Meet",
-    category: "Sports",
-    date: "2026-11-25",
-    time: "09:00 AM",
-    location: "University Sports Ground",
-    organizer: "Sports Club",
-    capacity: 300,
-    registered: 215,
-    description:
-      "Participate in friendly competitions and support your department in various sporting activities.",
-    highlights: [
-      "Team competitions",
-      "Individual events",
-      "Award ceremony",
-    ],
-    icon: Trophy,
-    color: "#F3EAF5",
-  },
-  {
-    id: 5,
-    title: "Career Talks & Alumni Meetup",
-    category: "Career",
-    date: "2026-12-02",
-    time: "02:00 PM",
-    location: "Conference Room",
-    organizer: "Career Development Club",
-    capacity: 150,
-    registered: 95,
-    description:
-      "Meet university alumni, explore industry insights, and learn how to prepare for internships and professional careers.",
-    highlights: [
-      "Alumni networking",
-      "Career guidance",
-      "Industry insights",
-    ],
+  Seminar: {
     icon: Mic2,
     color: "#E8F3EF",
   },
-  {
-    id: 6,
-    title: "Community Volunteer Day",
-    category: "Community",
-    date: "2026-12-10",
-    time: "08:30 AM",
-    location: "University Main Gate",
-    organizer: "Social Welfare Club",
-    capacity: 80,
-    registered: 42,
-    description:
-      "Collaborate with fellow students in community service and social development activities.",
-    highlights: [
-      "Volunteer activities",
-      "Community engagement",
-      "Team collaboration",
-    ],
-    icon: HeartHandshake,
+  Cultural: {
+    icon: Palette,
+    color: "#FFF4DC",
+  },
+  Sports: {
+    icon: Trophy,
+    color: "#F3EAF5",
+  },
+  Career: {
+    icon: Mic2,
+    color: "#E8F3EF",
+  },
+  Competition: {
+    icon: Trophy,
+    color: "#F3EAF5",
+  },
+  Other: {
+    icon: CalendarDays,
     color: "#F6EDE8",
   },
-];
+};
+
+// ========================================
+// CLUB DEMO
+// Existing club cards are preserved.
+// Club membership is NOT MongoDB-connected.
+// ========================================
 
 const clubs = [
   {
@@ -205,113 +144,388 @@ const clubs = [
   },
 ];
 
-const categories = [
-  "All",
-  "Technology",
-  "Academic",
-  "Cultural",
-  "Sports",
-  "Career",
-  "Community",
-];
+// ========================================
+// HELPERS
+// ========================================
 
-const formatDate = (date) =>
-  new Date(`${date}T12:00:00`).toLocaleDateString("en-US", {
+function getId(item) {
+  if (!item) return "";
+
+  if (typeof item === "string") {
+    return item;
+  }
+
+  return String(item._id || item.id || "");
+}
+
+function readSavedEvents() {
+  try {
+    const data = JSON.parse(
+      localStorage.getItem(SAVED_KEY) || "[]"
+    );
+
+    return Array.isArray(data)
+      ? data.filter((item) => typeof item === "string")
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function formatDate(value) {
+  if (!value) return "Not scheduled";
+
+  const date = new Date(
+    `${String(value).slice(0, 10)}T12:00:00`
+  );
+
+  if (Number.isNaN(date.getTime())) {
+    return "Invalid date";
+  }
+
+  return date.toLocaleDateString("en-US", {
     day: "numeric",
     month: "short",
     year: "numeric",
   });
+}
 
-function StudentEvents() {
-  const [activeTab, setActiveTab] = useState("explore");
+function formatTime(value) {
+  if (!value) return "—";
+
+  const [hours, minutes] = String(value)
+    .split(":")
+    .map(Number);
+
+  if (
+    !Number.isInteger(hours) ||
+    !Number.isInteger(minutes)
+  ) {
+    return value;
+  }
+
+  const suffix = hours >= 12 ? "PM" : "AM";
+  const hour12 = hours % 12 || 12;
+
+  return `${hour12}:${String(minutes).padStart(2, "0")} ${suffix}`;
+}
+
+function formatDeadline(value) {
+  if (!value) return "Until event starts";
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return "—";
+  }
+
+  return date.toLocaleString("en-US", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
+}
+
+function getEventStart(event) {
+  // Must match backend eventRoutes.js campus
+  // timezone: Bangladesh UTC+06:00.
+  return new Date(
+    `${event.date}T${event.startTime}:00+06:00`
+  );
+}
+
+function isUpcoming(event) {
+  return getEventStart(event).getTime() > Date.now();
+}
+
+// ========================================
+// AUTHENTICATED API REQUEST
+// ========================================
+
+async function apiRequest(path, options = {}) {
+  const token = getAuthToken();
+
+  if (!token) {
+    throw new Error(
+      "Your login session is unavailable. Please log in again."
+    );
+  }
+
+  let response;
+
+  try {
+    response = await fetch(`${API}${path}`, {
+      ...options,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        ...(options.body
+          ? { "Content-Type": "application/json" }
+          : {}),
+        ...(options.headers || {}),
+      },
+      cache: "no-store",
+    });
+  } catch {
+    throw new Error(
+      "Cannot connect to the UniBee backend."
+    );
+  }
+
+  const payload = await response
+    .json()
+    .catch(() => null);
+
+  if (!response.ok || payload?.success === false) {
+    throw new Error(
+      payload?.message ||
+        `Request failed (${response.status}).`
+    );
+  }
+
+  return payload;
+}
+
+// ========================================
+// NORMALIZE EVENTS
+// ========================================
+
+function normalizeEvent(event) {
+  const capacity = Number(event.capacity) || 0;
+  const registered =
+    Number(event.registrationCount) || 0;
+
+  return {
+    ...event,
+    id: getId(event),
+    date: String(event.date || "").slice(0, 10),
+    location: event.venue || "Not specified",
+    startTime: event.startTime || "00:00",
+    endTime: event.endTime || "00:00",
+    capacity,
+    registered,
+    availableSeats: Math.max(
+      0,
+      capacity - registered
+    ),
+    category: event.category || "Other",
+    description: event.description || "",
+    organizer: event.organizer || "University",
+    registrationOpen:
+      event.registrationOpen === true,
+  };
+}
+
+// ========================================
+// SUMMARY CARD
+// ========================================
+
+function SummaryCard({ title, value, icon: Icon }) {
+  return (
+    <div className="rounded-2xl border border-[#E2EADC] bg-white p-6 shadow-sm transition hover:-translate-y-1 hover:shadow-lg">
+      <div className="mb-5 flex h-12 w-12 items-center justify-center rounded-xl bg-[#EAF2E8] text-[#234E43]">
+        <Icon size={24} />
+      </div>
+
+      <p className="text-sm text-[#718579]">
+        {title}
+      </p>
+
+      <h2 className="mt-2 text-3xl font-extrabold text-[#234E43]">
+        {value}
+      </h2>
+    </div>
+  );
+}
+
+// ========================================
+// MAIN COMPONENT
+// ========================================
+
+export default function StudentEvents() {
+  const [events, setEvents] = useState([]);
+  const [registrations, setRegistrations] =
+    useState([]);
+
+  const [loading, setLoading] = useState(true);
+  const [busyEventId, setBusyEventId] =
+    useState("");
+
+  const [error, setError] = useState("");
+  const [feedback, setFeedback] = useState("");
+
+  const [activeTab, setActiveTab] =
+    useState("explore");
+
   const [search, setSearch] = useState("");
-  const [category, setCategory] = useState("All");
-  const [savedIds, setSavedIds] = useState([]);
-  const [registeredIds, setRegisteredIds] = useState([]);
-  const [joinedClubs, setJoinedClubs] = useState([]);
-  const [selectedEvent, setSelectedEvent] = useState(null);
-  const [message, setMessage] = useState("");
+  const [category, setCategory] =
+    useState("All");
 
-  const today = new Date().toLocaleDateString("en-CA");
+  const [savedIds, setSavedIds] =
+    useState(readSavedEvents);
+
+  const [joinedClubs, setJoinedClubs] =
+    useState([]);
+
+  const [selectedEventId, setSelectedEventId] =
+    useState("");
+
+  // ========================================
+  // LOAD EVENTS AND MY REGISTRATIONS
+  // ========================================
+
+  const loadData = useCallback(
+    async ({ silent = false } = {}) => {
+      if (!silent) {
+        setLoading(true);
+      }
+
+      setError("");
+
+      try {
+        const [eventResponse, registrationResponse] =
+          await Promise.all([
+            apiRequest("/api/events"),
+            apiRequest("/api/events/my-registrations"),
+          ]);
+
+        if (!Array.isArray(eventResponse.data)) {
+          throw new Error(
+            "Invalid events API response."
+          );
+        }
+
+        if (
+          !Array.isArray(registrationResponse.data)
+        ) {
+          throw new Error(
+            "Invalid registrations API response."
+          );
+        }
+
+        setEvents(
+          eventResponse.data.map(normalizeEvent)
+        );
+
+        setRegistrations(
+          registrationResponse.data
+        );
+      } catch (err) {
+        setError(err.message);
+
+        if (!silent) {
+          setEvents([]);
+          setRegistrations([]);
+        }
+      } finally {
+        setLoading(false);
+      }
+    },
+    []
+  );
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
+
+  // ========================================
+  // REGISTRATION STATE
+  // ========================================
+
+  const activeRegistrations = useMemo(
+    () =>
+      registrations.filter(
+        (registration) =>
+          registration.status === "Registered"
+      ),
+    [registrations]
+  );
+
+  const registeredIds = useMemo(
+    () =>
+      new Set(
+        activeRegistrations.map(
+          (registration) =>
+            getId(registration.event)
+        )
+      ),
+    [activeRegistrations]
+  );
+
+  const selectedEvent = events.find(
+    (event) => event.id === selectedEventId
+  ) || null;
+
+  const selectedRegistration = selectedEvent
+    ? activeRegistrations.find(
+        (registration) =>
+          getId(registration.event) ===
+          selectedEvent.id
+      )
+    : null;
+
+  // ========================================
+  // EVENT FILTERING
+  // ========================================
+
+  const categories = useMemo(
+    () => [
+      "All",
+      ...new Set(
+        events.map((event) => event.category)
+      ),
+    ],
+    [events]
+  );
 
   const filteredEvents = useMemo(() => {
     const query = search.trim().toLowerCase();
 
     return events
       .filter((event) => {
-        const matchesSearch =
-          event.title.toLowerCase().includes(query) ||
-          event.organizer.toLowerCase().includes(query) ||
-          event.location.toLowerCase().includes(query);
+        const matchesSearch = [
+          event.title,
+          event.organizer,
+          event.location,
+          event.description,
+        ].some((value) =>
+          String(value || "")
+            .toLowerCase()
+            .includes(query)
+        );
 
         const matchesCategory =
-          category === "All" || event.category === category;
+          category === "All" ||
+          event.category === category;
 
         const matchesTab =
           activeTab === "explore" ||
-          (activeTab === "saved" && savedIds.includes(event.id)) ||
+          (activeTab === "saved" &&
+            savedIds.includes(event.id)) ||
           (activeTab === "registered" &&
-            registeredIds.includes(event.id));
+            registeredIds.has(event.id));
 
-        return matchesSearch && matchesCategory && matchesTab;
+        return (
+          matchesSearch &&
+          matchesCategory &&
+          matchesTab
+        );
       })
-      .sort((a, b) => a.date.localeCompare(b.date));
-  }, [search, category, activeTab, savedIds, registeredIds]);
+      .sort(
+        (a, b) =>
+          a.date.localeCompare(b.date) ||
+          a.startTime.localeCompare(b.startTime)
+      );
+  }, [
+    events,
+    activeTab,
+    category,
+    search,
+    savedIds,
+    registeredIds,
+  ]);
 
   const upcomingCount = events.filter(
-    (event) => event.date >= today
+    (event) => isUpcoming(event)
   ).length;
-
-  const toggleSave = (id) => {
-    setSavedIds((previous) =>
-      previous.includes(id)
-        ? previous.filter((item) => item !== id)
-        : [...previous, id]
-    );
-  };
-
-  const registerEvent = () => {
-    if (!selectedEvent) return;
-
-    if (selectedEvent.date < today) {
-      setMessage("Registration is closed because this event has passed.");
-      return;
-    }
-
-    if (selectedEvent.registered >= selectedEvent.capacity) {
-      setMessage("This event is fully booked.");
-      return;
-    }
-
-    if (registeredIds.includes(selectedEvent.id)) {
-      setMessage("You have already registered for this demo event.");
-      return;
-    }
-
-    setRegisteredIds((previous) => [...previous, selectedEvent.id]);
-
-    setMessage(
-      "Demo registration recorded in this page only. No real event registration has been submitted."
-    );
-  };
-
-  const cancelRegistration = () => {
-    if (!selectedEvent) return;
-
-    setRegisteredIds((previous) =>
-      previous.filter((id) => id !== selectedEvent.id)
-    );
-
-    setMessage("Demo registration cancelled.");
-  };
-
-  const toggleClub = (id) => {
-    setJoinedClubs((previous) =>
-      previous.includes(id)
-        ? previous.filter((item) => item !== id)
-        : [...previous, id]
-    );
-  };
 
   const summary = [
     {
@@ -321,7 +535,7 @@ function StudentEvents() {
     },
     {
       title: "My Registrations",
-      value: registeredIds.length,
+      value: activeRegistrations.length,
       icon: Ticket,
     },
     {
@@ -330,88 +544,278 @@ function StudentEvents() {
       icon: BookmarkCheck,
     },
     {
-      title: "Joined Clubs",
-      value: joinedClubs.length,
+      title: "Student Clubs",
+      value: clubs.length,
       icon: Users,
     },
   ];
 
+  // ========================================
+  // SAVE / UNSAVE EVENTS
+  // ========================================
+
+  function toggleSave(id) {
+    setSavedIds((previous) => {
+      const updated = previous.includes(id)
+        ? previous.filter((item) => item !== id)
+        : [...previous, id];
+
+      try {
+        localStorage.setItem(
+          SAVED_KEY,
+          JSON.stringify(updated)
+        );
+      } catch {
+        // Saving is optional and browser-local.
+      }
+
+      return updated;
+    });
+  }
+
+  // ========================================
+  // REAL EVENT REGISTRATION
+  // ========================================
+
+  async function registerEvent(eventId) {
+    if (!eventId || busyEventId) return;
+
+    setBusyEventId(eventId);
+    setError("");
+    setFeedback("");
+
+    try {
+      const response = await apiRequest(
+        `/api/events/${eventId}/register`,
+        {
+          method: "POST",
+        }
+      );
+
+      setFeedback(
+        response.message ||
+          "Successfully registered for this event."
+      );
+
+      await loadData({ silent: true });
+    } catch (err) {
+      setError(err.message);
+      await loadData({ silent: true });
+    } finally {
+      setBusyEventId("");
+    }
+  }
+
+  // ========================================
+  // CANCEL MY REGISTRATION
+  // ========================================
+
+  async function cancelRegistration(eventId) {
+    if (!eventId || busyEventId) return;
+
+    if (
+      !window.confirm(
+        "Are you sure you want to cancel your event registration?"
+      )
+    ) {
+      return;
+    }
+
+    setBusyEventId(eventId);
+    setError("");
+    setFeedback("");
+
+    try {
+      const response = await apiRequest(
+        `/api/events/${eventId}/register`,
+        {
+          method: "DELETE",
+        }
+      );
+
+      setFeedback(
+        response.message ||
+          "Registration cancelled successfully."
+      );
+
+      await loadData({ silent: true });
+    } catch (err) {
+      setError(err.message);
+      await loadData({ silent: true });
+    } finally {
+      setBusyEventId("");
+    }
+  }
+
+  // ========================================
+  // CLUB DEMO (PRESERVED)
+  // ========================================
+
+  function toggleClub(id) {
+    setJoinedClubs((previous) =>
+      previous.includes(id)
+        ? previous.filter((value) => value !== id)
+        : [...previous, id]
+    );
+  }
+
+  // ========================================
+  // REGISTER BUTTON STATUS
+  // ========================================
+
+  function getRegistrationLabel(event) {
+    if (registeredIds.has(event.id)) {
+      return "Registered";
+    }
+
+    if (!isUpcoming(event)) {
+      return "Event Started / Ended";
+    }
+
+    if (
+      event.availableSeats <= 0
+    ) {
+      return "Fully Booked";
+    }
+
+    if (!event.registrationOpen) {
+      return "Registration Closed";
+    }
+
+    return "Register for Event";
+  }
+
+  // ========================================
+  // UI
+  // ========================================
+
   return (
     <div className="space-y-8">
-      {/* Page Header */}
-      <div>
-        <p className="mb-2 text-xs font-bold tracking-[0.16em] text-[#B18B37]">
-          CAMPUS LIFE
-        </p>
 
-        <h1 className="text-3xl font-extrabold text-[#234E43] md:text-4xl">
-          Clubs & Events
-        </h1>
+      {/* PAGE HEADER */}
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <p className="mb-2 text-xs font-bold tracking-[0.16em] text-[#B18B37]">
+            CAMPUS LIFE
+          </p>
 
-        <p className="mt-3 text-[#718579]">
-          Discover campus activities, connect with communities,
-          and make the most of university life.
-        </p>
+          <h1 className="text-3xl font-extrabold text-[#234E43] md:text-4xl">
+            Clubs & Events
+          </h1>
+
+          <p className="mt-3 text-[#718579]">
+            Discover campus activities, register
+            for university events and connect
+            with your community.
+          </p>
+        </div>
+
+        <button
+          type="button"
+          onClick={() => loadData()}
+          disabled={loading || !!busyEventId}
+          className="inline-flex items-center gap-2 rounded-xl border border-[#DCE8DA] bg-white px-4 py-3 text-sm font-bold text-[#234E43] disabled:opacity-50"
+        >
+          <RefreshCw size={17} />
+          Refresh Events
+        </button>
       </div>
 
-      {/* Summary Cards */}
+      {/* FEEDBACK */}
+      {feedback && (
+        <div
+          role="status"
+          className="flex items-center gap-3 rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm font-medium text-emerald-700"
+        >
+          <CheckCircle2 size={19} />
+          {feedback}
+        </div>
+      )}
+
+      {error && (
+        <div
+          role="alert"
+          className="flex items-start gap-3 rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700"
+        >
+          <AlertCircle
+            size={20}
+            className="shrink-0"
+          />
+          {error}
+        </div>
+      )}
+
+      {loading && (
+        <div className="flex items-center gap-3 rounded-xl bg-[#EAF2E8] p-4 text-sm text-[#234E43]">
+          <Loader2
+            size={18}
+            className="animate-spin"
+          />
+          Loading university events...
+        </div>
+      )}
+
+      {/* SUMMARY CARDS */}
       <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-4">
-        {summary.map((item) => {
-          const Icon = item.icon;
-
-          return (
-            <div
-              key={item.title}
-              className="rounded-2xl border border-[#E2EADC] bg-white p-6 shadow-sm transition hover:-translate-y-1 hover:shadow-lg"
-            >
-              <div className="mb-5 flex h-12 w-12 items-center justify-center rounded-xl bg-[#EAF2E8] text-[#234E43]">
-                <Icon size={24} />
-              </div>
-
-              <p className="text-sm text-[#718579]">
-                {item.title}
-              </p>
-
-              <h2 className="mt-2 text-3xl font-extrabold text-[#234E43]">
-                {item.value}
-              </h2>
-            </div>
-          );
-        })}
+        {summary.map((item) => (
+          <SummaryCard
+            key={item.title}
+            {...item}
+          />
+        ))}
       </div>
 
-      {/* Hero Banner */}
+      {/* HERO */}
       <section className="relative overflow-hidden rounded-3xl bg-[#234E43] p-8 text-white md:p-10">
         <div className="absolute -right-16 -top-20 h-72 w-72 rounded-full border-[40px] border-white/5" />
 
         <div className="relative z-10 max-w-2xl">
           <span className="inline-flex items-center gap-2 rounded-full bg-white/10 px-4 py-2 text-xs font-bold text-[#DCE9DE]">
-            <Sparkles size={17} className="text-[#D9A536]" />
+            <Sparkles
+              size={17}
+              className="text-[#D9A536]"
+            />
             EXPLORE CAMPUS LIFE
           </span>
 
           <h2 className="mt-6 text-3xl font-extrabold md:text-4xl">
             Learn together.
-            <br />
-            <span className="text-[#E8BE62]">
+            <span className="mt-1 block text-[#E8BE62]">
               Connect beyond classrooms.
             </span>
           </h2>
 
           <p className="mt-5 leading-relaxed text-[#C9DDCF]">
-            From technical workshops to cultural festivals,
-            UniBee brings your campus community together.
+            From technical workshops to cultural
+            festivals, UniBee brings your campus
+            community together.
           </p>
         </div>
       </section>
 
-      {/* Main Tabs */}
+      {/* MAIN TABS */}
       <div className="flex flex-wrap gap-3">
         {[
-          { id: "explore", label: "Explore Events", icon: CalendarDays },
-          { id: "registered", label: "My Events", icon: Ticket },
-          { id: "saved", label: "Saved", icon: Bookmark },
-          { id: "clubs", label: "Student Clubs", icon: Users },
+          {
+            id: "explore",
+            label: "Explore Events",
+            icon: CalendarDays,
+          },
+          {
+            id: "registered",
+            label: "My Events",
+            icon: Ticket,
+          },
+          {
+            id: "saved",
+            label: "Saved",
+            icon: Bookmark,
+          },
+          {
+            id: "clubs",
+            label: "Student Clubs",
+            icon: Users,
+          },
         ].map((tab) => {
           const Icon = tab.icon;
 
@@ -419,7 +823,10 @@ function StudentEvents() {
             <button
               key={tab.id}
               type="button"
-              onClick={() => setActiveTab(tab.id)}
+              onClick={() => {
+                setActiveTab(tab.id);
+                setError("");
+              }}
               className={`flex items-center gap-2 rounded-xl px-5 py-3 text-sm font-bold transition ${
                 activeTab === tab.id
                   ? "bg-[#234E43] text-white"
@@ -433,57 +840,70 @@ function StudentEvents() {
         })}
       </div>
 
+      {/* STUDENT CLUBS */}
       {activeTab === "clubs" ? (
-        /* Student Clubs */
-        <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-3">
-          {clubs.map((club) => {
-            const Icon = club.icon;
-            const joined = joinedClubs.includes(club.id);
+        <div className="space-y-5">
+          <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+            Student Clubs are currently a frontend
+            demonstration. Club joining is not yet
+            connected to MongoDB.
+          </div>
 
-            return (
-              <article
-                key={club.id}
-                className="flex flex-col rounded-3xl border border-[#E2EADC] bg-white p-6 shadow-sm transition hover:-translate-y-1 hover:shadow-lg"
-              >
-                <div className="mb-6 flex h-14 w-14 items-center justify-center rounded-2xl bg-[#EAF2E8] text-[#234E43]">
-                  <Icon size={27} />
-                </div>
+          <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-3">
+            {clubs.map((club) => {
+              const Icon = club.icon;
+              const joined =
+                joinedClubs.includes(club.id);
 
-                <span className="text-xs font-bold uppercase tracking-wider text-[#B18B37]">
-                  {club.category}
-                </span>
-
-                <h3 className="mt-2 text-xl font-bold text-[#234E43]">
-                  {club.name}
-                </h3>
-
-                <p className="mt-3 flex-1 text-sm leading-relaxed text-[#718579]">
-                  {club.description}
-                </p>
-
-                <div className="mt-6 flex items-center gap-2 border-t border-[#EDF1EB] pt-4 text-sm text-[#607B6C]">
-                  <Users size={17} />
-                  {club.members.toLocaleString()}{joined ? " + you (demo)" : ""} members
-                </div>
-
-                <button
-                  type="button"
-                  onClick={() => toggleClub(club.id)}
-                  className={`mt-5 w-full rounded-xl px-5 py-3.5 font-bold transition ${
-                    joined
-                      ? "border border-[#DCE8DA] bg-[#EAF2E8] text-[#234E43]"
-                      : "bg-[#234E43] text-white hover:bg-[#326657]"
-                  }`}
+              return (
+                <article
+                  key={club.id}
+                  className="flex flex-col rounded-3xl border border-[#E2EADC] bg-white p-6 shadow-sm transition hover:-translate-y-1 hover:shadow-lg"
                 >
-                  {joined ? "Leave Club (Demo)" : "Join Club (Demo)"}
-                </button>
-              </article>
-            );
-          })}
+                  <div className="mb-6 flex h-14 w-14 items-center justify-center rounded-2xl bg-[#EAF2E8] text-[#234E43]">
+                    <Icon size={27} />
+                  </div>
+
+                  <span className="text-xs font-bold uppercase tracking-wider text-[#B18B37]">
+                    {club.category}
+                  </span>
+
+                  <h3 className="mt-2 text-xl font-bold text-[#234E43]">
+                    {club.name}
+                  </h3>
+
+                  <p className="mt-3 flex-1 text-sm leading-relaxed text-[#718579]">
+                    {club.description}
+                  </p>
+
+                  <p className="mt-6 flex items-center gap-2 border-t border-[#EDF1EB] pt-4 text-sm text-[#607B6C]">
+                    <Users size={17} />
+                    {club.members} example members
+                  </p>
+
+                  <button
+                    type="button"
+                    onClick={() =>
+                      toggleClub(club.id)
+                    }
+                    className={`mt-5 w-full rounded-xl px-5 py-3.5 font-bold ${
+                      joined
+                        ? "border border-[#DCE8DA] bg-[#EAF2E8] text-[#234E43]"
+                        : "bg-[#234E43] text-white"
+                    }`}
+                  >
+                    {joined
+                      ? "Leave Club (Demo)"
+                      : "Join Club (Demo)"}
+                  </button>
+                </article>
+              );
+            })}
+          </div>
         </div>
       ) : (
         <>
-          {/* Event Search and Filters */}
+          {/* SEARCH & FILTERS */}
           <section className="rounded-2xl border border-[#E2EADC] bg-white p-5 shadow-sm">
             <div className="flex flex-col gap-3 lg:flex-row">
               <div className="relative flex-1">
@@ -495,21 +915,30 @@ function StudentEvents() {
                 <input
                   type="search"
                   value={search}
-                  onChange={(event) => setSearch(event.target.value)}
-                  placeholder="Search events, organizers, or locations..."
+                  onChange={(event) =>
+                    setSearch(event.target.value)
+                  }
+                  placeholder="Search events, organizers or locations..."
                   className="w-full rounded-xl border border-[#E2EADC] bg-[#F9FBF8] py-3.5 pl-12 pr-4 text-sm text-[#234E43] outline-none focus:border-[#A6C1A4]"
                 />
               </div>
 
               <select
                 value={category}
-                onChange={(event) => setCategory(event.target.value)}
-                aria-label="Filter events by category"
+                onChange={(event) =>
+                  setCategory(event.target.value)
+                }
+                aria-label="Filter event category"
                 className="rounded-xl border border-[#E2EADC] bg-white px-4 py-3 text-sm text-[#45685B]"
               >
                 {categories.map((item) => (
-                  <option key={item} value={item}>
-                    {item === "All" ? "All Categories" : item}
+                  <option
+                    key={item}
+                    value={item}
+                  >
+                    {item === "All"
+                      ? "All Categories"
+                      : item}
                   </option>
                 ))}
               </select>
@@ -520,25 +949,32 @@ function StudentEvents() {
             </p>
           </section>
 
-          {/* Event Cards */}
+          {/* EVENT CARDS */}
           {filteredEvents.length > 0 ? (
             <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-3">
               {filteredEvents.map((event) => {
-                const Icon = event.icon;
-                const isSaved = savedIds.includes(event.id);
-                const isRegistered = registeredIds.includes(event.id);
-                const isPast = event.date < today;
-                const isFull = event.registered >= event.capacity;
+                const style =
+                  EVENT_STYLES[event.category] ||
+                  EVENT_STYLES.Other;
+
+                const Icon = style.icon;
+                const isSaved =
+                  savedIds.includes(event.id);
+
+                const isRegistered =
+                  registeredIds.has(event.id);
 
                 return (
                   <article
                     key={event.id}
-                    className="flex flex-col overflow-hidden rounded-3xl border border-[#E2EADC] bg-white shadow-sm transition-all duration-300 hover:-translate-y-1 hover:shadow-xl hover:shadow-[#234E43]/10"
+                    className="flex flex-col overflow-hidden rounded-3xl border border-[#E2EADC] bg-white shadow-sm transition-all duration-300 hover:-translate-y-1 hover:shadow-xl"
                   >
-                    {/* Event Cover */}
+                    {/* COVER */}
                     <div
                       className="relative flex h-44 items-center justify-center overflow-hidden"
-                      style={{ backgroundColor: event.color }}
+                      style={{
+                        backgroundColor: style.color,
+                      }}
                     >
                       <div className="absolute -right-12 -top-16 h-52 w-52 rounded-full border-[30px] border-white/40" />
 
@@ -550,8 +986,14 @@ function StudentEvents() {
 
                       <button
                         type="button"
-                        onClick={() => toggleSave(event.id)}
-                        aria-label={isSaved ? "Remove saved event" : "Save event"}
+                        onClick={() =>
+                          toggleSave(event.id)
+                        }
+                        aria-label={
+                          isSaved
+                            ? "Remove saved event"
+                            : "Save event"
+                        }
                         aria-pressed={isSaved}
                         className="absolute right-4 top-4 rounded-xl bg-white p-2.5 text-[#234E43] shadow-sm"
                       >
@@ -563,6 +1005,7 @@ function StudentEvents() {
                       </button>
                     </div>
 
+                    {/* CARD CONTENT */}
                     <div className="flex flex-1 flex-col p-6">
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <span className="rounded-full bg-[#EAF2E8] px-3 py-1.5 text-xs font-bold text-[#477764]">
@@ -570,16 +1013,21 @@ function StudentEvents() {
                         </span>
 
                         {isRegistered ? (
-                          <span className="text-xs font-bold text-[#427A67]">
-                            Registered (Demo)
+                          <span className="inline-flex items-center gap-1 text-xs font-bold text-[#427A67]">
+                            <CheckCircle2 size={15} />
+                            Registered
                           </span>
-                        ) : isPast ? (
+                        ) : !isUpcoming(event) ? (
                           <span className="text-xs font-bold text-[#8A9F90]">
                             Past Event
                           </span>
-                        ) : isFull ? (
+                        ) : event.availableSeats <= 0 ? (
                           <span className="text-xs font-bold text-red-700">
                             Fully Booked
+                          </span>
+                        ) : !event.registrationOpen ? (
+                          <span className="text-xs font-bold text-amber-700">
+                            Registration Closed
                           </span>
                         ) : null}
                       </div>
@@ -600,7 +1048,9 @@ function StudentEvents() {
 
                         <p className="flex items-center gap-2">
                           <Clock3 size={17} />
-                          {event.time}
+                          {formatTime(event.startTime)}
+                          {" – "}
+                          {formatTime(event.endTime)}
                         </p>
 
                         <p className="flex items-center gap-2">
@@ -610,15 +1060,22 @@ function StudentEvents() {
 
                         <p className="flex items-center gap-2">
                           <Users size={17} />
-                          {event.registered + Number(isRegistered)}/{event.capacity} registered
+                          {event.registered}/{event.capacity}
+                          {" "}registered
+                        </p>
+
+                        <p className="flex items-center gap-2">
+                          <Ticket size={17} />
+                          {event.availableSeats} seats available
                         </p>
                       </div>
 
                       <button
                         type="button"
                         onClick={() => {
-                          setSelectedEvent(event);
-                          setMessage("");
+                          setSelectedEventId(event.id);
+                          setFeedback("");
+                          setError("");
                         }}
                         className="mt-7 flex w-full items-center justify-center gap-2 rounded-xl bg-[#234E43] px-5 py-3.5 font-bold text-white transition hover:bg-[#326657]"
                       >
@@ -638,11 +1095,17 @@ function StudentEvents() {
               />
 
               <h3 className="mt-4 text-xl font-bold text-[#234E43]">
-                No Events Found
+                {activeTab === "registered"
+                  ? "No Registered Events"
+                  : activeTab === "saved"
+                    ? "No Saved Events"
+                    : "No Events Found"}
               </h3>
 
               <p className="mt-2 text-[#718579]">
-                Try another category or search.
+                {activeTab === "registered"
+                  ? "Events you register for will appear here."
+                  : "Try another category or search."}
               </p>
 
               <button
@@ -654,34 +1117,42 @@ function StudentEvents() {
                 }}
                 className="mt-5 rounded-xl bg-[#234E43] px-6 py-3 font-bold text-white"
               >
-                Clear Filters
+                Explore Events
               </button>
             </div>
           )}
         </>
       )}
 
-      {/* Details Modal */}
+      {/* EVENT DETAILS MODAL */}
       {selectedEvent && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
-          onClick={() => setSelectedEvent(null)}
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 p-4"
+          onMouseDown={(event) => {
+            if (
+              event.target ===
+              event.currentTarget
+            ) {
+              setSelectedEventId("");
+            }
+          }}
         >
-          <div
+          <section
             role="dialog"
             aria-modal="true"
-            aria-labelledby="event-modal-title"
+            aria-labelledby="student-event-modal-title"
             className="max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-3xl bg-white p-7 shadow-2xl"
-            onClick={(event) => event.stopPropagation()}
           >
+            {/* MODAL HEADER */}
             <div className="flex items-start justify-between gap-4">
               <div>
                 <p className="text-xs font-bold text-[#B18B37]">
-                  {selectedEvent.category.toUpperCase()} EVENT
+                  {selectedEvent.category.toUpperCase()}
+                  {" "}EVENT
                 </p>
 
                 <h2
-                  id="event-modal-title"
+                  id="student-event-modal-title"
                   className="mt-2 text-2xl font-extrabold text-[#234E43]"
                 >
                   {selectedEvent.title}
@@ -690,7 +1161,9 @@ function StudentEvents() {
 
               <button
                 type="button"
-                onClick={() => setSelectedEvent(null)}
+                onClick={() =>
+                  setSelectedEventId("")
+                }
                 aria-label="Close event details"
                 className="rounded-xl p-2 text-[#718579] hover:bg-[#F1F7EF]"
               >
@@ -698,106 +1171,155 @@ function StudentEvents() {
               </button>
             </div>
 
+            {/* EVENT DETAILS */}
             <div className="mt-6 grid gap-4 rounded-2xl bg-[#F6F8F3] p-5 text-sm text-[#45685B] sm:grid-cols-2">
               <p>
-                <strong>Date:</strong> {formatDate(selectedEvent.date)}
+                <strong>Date:</strong>{" "}
+                {formatDate(selectedEvent.date)}
               </p>
 
               <p>
-                <strong>Time:</strong> {selectedEvent.time}
+                <strong>Time:</strong>{" "}
+                {formatTime(selectedEvent.startTime)}
+                {" – "}
+                {formatTime(selectedEvent.endTime)}
               </p>
 
               <p>
-                <strong>Location:</strong> {selectedEvent.location}
+                <strong>Venue:</strong>{" "}
+                {selectedEvent.location}
               </p>
 
               <p>
-                <strong>Organizer:</strong> {selectedEvent.organizer}
+                <strong>Organizer:</strong>{" "}
+                {selectedEvent.organizer}
+              </p>
+
+              <p>
+                <strong>Available Seats:</strong>{" "}
+                {selectedEvent.availableSeats}
+              </p>
+
+              <p>
+                <strong>Capacity:</strong>{" "}
+                {selectedEvent.capacity}
+              </p>
+
+              <p className="sm:col-span-2">
+                <strong>Registration Deadline:</strong>{" "}
+                {formatDeadline(
+                  selectedEvent.registrationDeadline
+                )}
               </p>
             </div>
 
+            {/* DESCRIPTION */}
             <h3 className="mt-7 font-bold text-[#234E43]">
               About This Event
             </h3>
 
-            <p className="mt-3 leading-relaxed text-[#718579]">
-              {selectedEvent.description}
+            <p className="mt-3 whitespace-pre-line leading-relaxed text-[#718579]">
+              {selectedEvent.description ||
+                "No event description was provided."}
             </p>
 
-            <h3 className="mt-7 font-bold text-[#234E43]">
-              Event Highlights
-            </h3>
+            {/* REGISTRATION STATUS */}
+            {selectedRegistration && (
+              <div className="mt-6 rounded-xl border border-emerald-200 bg-emerald-50 p-4">
+                <p className="flex items-center gap-2 font-bold text-emerald-700">
+                  <CheckCircle2 size={19} />
+                  Registration Confirmed
+                </p>
 
-            <div className="mt-4 space-y-3">
-              {selectedEvent.highlights.map((highlight) => (
-                <div
-                  key={highlight}
-                  className="flex items-center gap-3"
-                >
-                  <CheckCircle2
-                    size={18}
-                    className="text-[#477764]"
-                  />
+                <p className="mt-2 text-sm text-emerald-800">
+                  You are registered for this event.
+                </p>
+              </div>
+            )}
 
-                  <span className="text-sm text-[#607B6C]">
-                    {highlight}
-                  </span>
-                </div>
-              ))}
-            </div>
-
-            {message && (
+            {/* MODAL FEEDBACK */}
+            {feedback && (
               <p
                 role="status"
-                className="mt-6 rounded-xl border border-[#DCE8DA] bg-[#F1F7EF] p-4 text-sm text-[#45685B]"
+                className="mt-5 rounded-xl bg-emerald-50 p-4 text-sm text-emerald-700"
               >
-                {message}
+                {feedback}
               </p>
             )}
 
-            {registeredIds.includes(selectedEvent.id) ? (
+            {error && (
+              <p
+                role="alert"
+                className="mt-5 rounded-xl bg-rose-50 p-4 text-sm text-rose-700"
+              >
+                {error}
+              </p>
+            )}
+
+            {/* REGISTRATION ACTION */}
+            {selectedRegistration ? (
               <button
                 type="button"
-                onClick={cancelRegistration}
-                className="mt-7 flex w-full items-center justify-center gap-2 rounded-xl border border-[#DCE8DA] bg-[#F1F7EF] px-5 py-3.5 font-bold text-[#234E43]"
+                disabled={
+                  !!busyEventId ||
+                  !isUpcoming(selectedEvent)
+                }
+                onClick={() =>
+                  cancelRegistration(
+                    selectedEvent.id
+                  )
+                }
+                className="mt-7 flex w-full items-center justify-center gap-2 rounded-xl border border-rose-200 bg-rose-50 px-5 py-3.5 font-bold text-rose-700 disabled:cursor-not-allowed disabled:opacity-50"
               >
-                <X size={18} />
-                Cancel Demo Registration
+                {busyEventId === selectedEvent.id ? (
+                  <Loader2
+                    size={18}
+                    className="animate-spin"
+                  />
+                ) : (
+                  <X size={18} />
+                )}
+
+                {!isUpcoming(selectedEvent)
+                  ? "Event Already Started"
+                  : "Cancel My Registration"}
               </button>
             ) : (
               <button
                 type="button"
-                onClick={registerEvent}
                 disabled={
-                  selectedEvent.date < today ||
-                  selectedEvent.registered >= selectedEvent.capacity
+                  !!busyEventId ||
+                  !selectedEvent.registrationOpen
+                }
+                onClick={() =>
+                  registerEvent(
+                    selectedEvent.id
+                  )
                 }
                 className="mt-7 flex w-full items-center justify-center gap-2 rounded-xl bg-[#234E43] px-5 py-3.5 font-bold text-white transition hover:bg-[#326657] disabled:cursor-not-allowed disabled:opacity-50"
               >
-                <Ticket size={18} />
-                {selectedEvent.date < today
-                  ? "Event Ended"
-                  : selectedEvent.registered >= selectedEvent.capacity
-                  ? "Fully Booked"
-                  : "Register for Event (Demo)"}
+                {busyEventId === selectedEvent.id ? (
+                  <Loader2
+                    size={18}
+                    className="animate-spin"
+                  />
+                ) : (
+                  <Ticket size={18} />
+                )}
+
+                {busyEventId === selectedEvent.id
+                  ? "Processing..."
+                  : getRegistrationLabel(selectedEvent)}
               </button>
             )}
-          </div>
+          </section>
         </div>
       )}
 
-      {/* Note */}
-      <div className="rounded-2xl border border-[#E9DCAE] bg-[#FFF9E9] p-5 text-sm leading-relaxed text-[#80651E]">
-        All campus events, clubs, registrations, and membership information
-        shown here are sample data. Registration and club joining are
-        frontend demonstrations only and will reset after refreshing the page.
-      </div>
-
+      {/* FOOTER */}
       <div className="border-t border-[#E2EADC] pt-5 text-xs text-[#8A9F90]">
         UniBee Student Portal — Clubs & Events
       </div>
     </div>
   );
 }
-
-export default StudentEvents;

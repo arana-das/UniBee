@@ -1,5 +1,11 @@
 
-import { useMemo, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
+
 import {
   FileText,
   Clock3,
@@ -8,256 +14,698 @@ import {
   Award,
   Search,
   CalendarDays,
-  UploadCloud,
   X,
   BookOpen,
   ArrowUpRight,
-  Paperclip,
   MessageSquare,
+  Link2,
+  Send,
+  RefreshCw,
+  Loader2,
+  ExternalLink,
+  ClipboardCheck,
 } from "lucide-react";
 
-// Frontend demonstration data.
-// Actual assignments and submissions will come from MongoDB.
+import { getAuthToken } from "../services/authApi";
 
-const initialAssignments = [
-  {
-    id: 1,
-    title: "React Component Design",
-    course: "Web Technologies",
-    code: "ICT 3201",
-    instructor: "Dr. Sarah Ahmed",
-    deadline: "2026-10-15",
-    status: "Pending",
-    marks: 20,
-    obtained: null,
-    description:
-      "Create reusable React components for a responsive university dashboard. Include proper component structure and styling.",
-    feedback: "",
-  },
-  {
-    id: 2,
-    title: "Database Schema Design",
-    course: "Database Management Systems",
-    code: "ICT 3203",
-    instructor: "Md. Rahim Hasan",
-    deadline: "2026-10-18",
-    status: "Pending",
-    marks: 25,
-    obtained: null,
-    description:
-      "Design a database schema for a university management system. Explain the entities, relationships, and design decisions.",
-    feedback: "",
-  },
-  {
-    id: 3,
-    title: "Network Topology Report",
-    course: "Computer Networks",
-    code: "ICT 3205",
-    instructor: "Dr. Nusrat Jahan",
-    deadline: "2026-10-20",
-    status: "Pending",
-    marks: 20,
-    obtained: null,
-    description:
-      "Prepare a report describing common network topologies, their applications, advantages, and limitations.",
-    feedback: "",
-  },
-  {
-    id: 4,
-    title: "Software Requirements Document",
-    course: "Software Engineering",
-    code: "ICT 3207",
-    instructor: "Dr. Farhan Kabir",
-    deadline: "2026-10-07",
-    status: "Submitted",
-    marks: 30,
-    obtained: null,
-    description:
-      "Prepare a software requirements specification for a proposed information system.",
-    feedback: "",
-  },
-  {
-    id: 5,
-    title: "HTML & CSS Portfolio",
-    course: "Web Technologies",
-    code: "ICT 3201",
-    instructor: "Dr. Sarah Ahmed",
-    deadline: "2026-09-30",
-    status: "Graded",
-    marks: 20,
-    obtained: 18,
-    description:
-      "Develop a responsive personal portfolio using HTML5 and CSS3.",
-    feedback:
-      "Good visual hierarchy and responsive design. Improve accessibility in navigation.",
-  },
-  {
-    id: 6,
-    title: "Programming Fundamentals Quiz",
-    course: "Software Engineering",
-    code: "ICT 3207",
-    instructor: "Dr. Farhan Kabir",
-    deadline: "2026-09-25",
-    status: "Graded",
-    marks: 15,
-    obtained: 14,
-    description:
-      "Complete the programming fundamentals assessment.",
-    feedback: "Excellent work. Clear problem-solving approach.",
-  },
-];
+// ========================================
+// UNIBEE STUDENT ASSIGNMENTS
+// MONGODB CONNECTED
+// ========================================
 
-const statusStyles = {
+const API_BASE = (
+  import.meta.env.VITE_API_URL ||
+  "http://localhost:5000"
+).replace(/\/+$/, "");
+
+const BASE = `${API_BASE}/api/assignments`;
+
+const STATUS_STYLES = {
   Pending: "bg-[#FFF4DC] text-[#9F741E]",
   Submitted: "bg-[#E8EFF8] text-[#456A94]",
   Graded: "bg-[#EAF2E8] text-[#427A67]",
   Overdue: "bg-red-50 text-red-700",
+  Closed: "bg-slate-100 text-slate-600",
 };
 
-function StudentAssignments() {
-  const [assignments, setAssignments] = useState(initialAssignments);
-  const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState("All");
-  const [courseFilter, setCourseFilter] = useState("All");
-  const [selected, setSelected] = useState(null);
-  const [selectedFile, setSelectedFile] = useState(null);
-  const [success, setSuccess] = useState("");
+// ========================================
+// API HELPER
+// ========================================
 
-  const today = new Date().toLocaleDateString("en-CA");
+async function request(path, options = {}) {
+  const token = getAuthToken();
 
-  const getStatus = (assignment) => {
-    if (
-      assignment.status === "Pending" &&
-      assignment.deadline < today
-    ) {
-      return "Overdue";
+  if (!token) {
+    throw new Error(
+      "Please log in to your Student account."
+    );
+  }
+
+  const {
+    method = "GET",
+    body,
+    signal,
+  } = options;
+
+  let response;
+
+  try {
+    response = await fetch(`${BASE}${path}`, {
+      method,
+      signal,
+      cache: "no-store",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        ...(body !== undefined
+          ? { "Content-Type": "application/json" }
+          : {}),
+      },
+      ...(body !== undefined
+        ? { body: JSON.stringify(body) }
+        : {}),
+    });
+  } catch (error) {
+    if (error.name === "AbortError") {
+      throw error;
     }
-    return assignment.status;
+
+    throw new Error(
+      "Cannot connect to UniBee backend."
+    );
+  }
+
+  const result = await response
+    .json()
+    .catch(() => null);
+
+  if (
+    !response.ok ||
+    !result ||
+    result.success !== true
+  ) {
+    throw new Error(
+      result?.message ||
+      `Assignment request failed (${response.status}).`
+    );
+  }
+
+  return result;
+}
+
+// ========================================
+// HELPERS
+// ========================================
+
+function getId(value) {
+  if (!value) return "";
+
+  if (typeof value === "string") {
+    return value;
+  }
+
+  return String(value.id || value._id || "");
+}
+
+function formatDate(value) {
+  if (!value) return "—";
+
+  const parts = String(value)
+    .slice(0, 10)
+    .split("-")
+    .map(Number);
+
+  if (
+    parts.length !== 3 ||
+    parts.some((part) => !Number.isFinite(part))
+  ) {
+    return String(value);
+  }
+
+  const date = new Date(
+    parts[0],
+    parts[1] - 1,
+    parts[2]
+  );
+
+  if (Number.isNaN(date.getTime())) {
+    return String(value);
+  }
+
+  return date.toLocaleDateString("en-GB", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  });
+}
+
+function formatDateTime(value) {
+  if (!value) return "—";
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return "—";
+  }
+
+  return date.toLocaleString("en-GB", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function normalizeAssignment(item) {
+  const course = item.course || {};
+
+  return {
+    ...item,
+    id: getId(item),
+    courseId: getId(course),
+    courseCode:
+      course.code || "N/A",
+    courseTitle:
+      course.title || "Course unavailable",
+    semester: item.semester || "",
+    mySubmission:
+      item.mySubmission || null,
+    canSubmit:
+      item.canSubmit === true,
+    isOverdue:
+      item.isOverdue === true,
   };
+}
+
+function getStatus(item) {
+  if (
+    item.mySubmission?.status === "Graded"
+  ) {
+    return "Graded";
+  }
+
+  if (item.mySubmission) {
+    return "Submitted";
+  }
+
+  if (item.status === "Closed") {
+    return "Closed";
+  }
+
+  if (item.isOverdue) {
+    return "Overdue";
+  }
+
+  return "Pending";
+}
+
+function StatusBadge({ status }) {
+  return (
+    <span
+      className={`rounded-full px-3 py-1.5 text-xs font-bold ${
+        STATUS_STYLES[status] ||
+        "bg-slate-100 text-slate-600"
+      }`}
+    >
+      {status}
+    </span>
+  );
+}
+
+// ========================================
+// SUMMARY CARD
+// ========================================
+
+function SummaryCard({
+  title,
+  value,
+  icon: Icon,
+}) {
+  return (
+    <div className="rounded-2xl border border-[#E2EADC] bg-white p-6 shadow-sm">
+      <div className="mb-5 flex h-12 w-12 items-center justify-center rounded-xl bg-[#EAF2E8] text-[#234E43]">
+        <Icon size={24} />
+      </div>
+
+      <p className="text-sm text-[#718579]">
+        {title}
+      </p>
+
+      <h2 className="mt-2 text-3xl font-extrabold text-[#234E43]">
+        {value}
+      </h2>
+    </div>
+  );
+}
+
+// ========================================
+// MAIN COMPONENT
+// ========================================
+
+export default function StudentAssignments() {
+  const [assignments, setAssignments] =
+    useState([]);
+
+  const [student, setStudent] =
+    useState(null);
+
+  const [loading, setLoading] =
+    useState(true);
+
+  const [submitting, setSubmitting] =
+    useState(false);
+
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
+  const [modalError, setModalError] =
+    useState("");
+
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] =
+    useState("All");
+
+  const [courseFilter, setCourseFilter] =
+    useState("All");
+
+  const [selectedId, setSelectedId] =
+    useState("");
+
+  const [submissionText, setSubmissionText] =
+    useState("");
+
+  const [submissionUrl, setSubmissionUrl] =
+    useState("");
+
+  const [refreshKey, setRefreshKey] =
+    useState(0);
+
+  // ========================================
+  // LOAD ASSIGNMENTS FROM MONGODB
+  // ========================================
+
+  const refresh = useCallback(() => {
+    setRefreshKey(
+      (previous) => previous + 1
+    );
+  }, []);
+
+  useEffect(() => {
+    const controller = new AbortController();
+
+    async function load() {
+      setLoading(true);
+      setError("");
+
+      try {
+        const result = await request(
+          "/student/my",
+          { signal: controller.signal }
+        );
+
+        if (controller.signal.aborted) {
+          return;
+        }
+
+        if (!Array.isArray(result.data)) {
+          throw new Error(
+            "Invalid assignment list received."
+          );
+        }
+
+        const normalized = result.data.map(
+          normalizeAssignment
+        );
+
+        setAssignments(normalized);
+        setStudent(result.student || null);
+      } catch (err) {
+        if (controller.signal.aborted) {
+          return;
+        }
+
+        setAssignments([]);
+        setStudent(null);
+        setError(err.message);
+      } finally {
+        if (!controller.signal.aborted) {
+          setLoading(false);
+        }
+      }
+    }
+
+    load();
+
+    return () => controller.abort();
+  }, [refreshKey]);
+
+  // ========================================
+  // SELECTED ASSIGNMENT
+  // ========================================
+
+  const selected = useMemo(
+    () =>
+      assignments.find(
+        (item) => item.id === selectedId
+      ) || null,
+    [assignments, selectedId]
+  );
+
+  function openDetails(item) {
+    setSelectedId(item.id);
+
+    setSubmissionText(
+      item.mySubmission?.submissionText || ""
+    );
+
+    setSubmissionUrl(
+      item.mySubmission?.submissionUrl || ""
+    );
+
+    setModalError("");
+    setSuccess("");
+  }
+
+  function closeDetails() {
+    if (submitting) return;
+
+    setSelectedId("");
+    setModalError("");
+  }
+
+  // ========================================
+  // FILTERS
+  // ========================================
+
+  const courseOptions = useMemo(() => {
+    const map = new Map();
+
+    assignments.forEach((item) => {
+      if (!map.has(item.courseId)) {
+        map.set(item.courseId, {
+          id: item.courseId,
+          code: item.courseCode,
+          title: item.courseTitle,
+        });
+      }
+    });
+
+    return [...map.values()].sort((a, b) =>
+      a.code.localeCompare(b.code)
+    );
+  }, [assignments]);
 
   const filtered = useMemo(() => {
     const query = search.trim().toLowerCase();
 
-    return assignments.filter((assignment) => {
-      const matchesSearch =
-        assignment.title.toLowerCase().includes(query) ||
-        assignment.course.toLowerCase().includes(query) ||
-        assignment.code.toLowerCase().includes(query);
-
-      const matchesStatus =
-        statusFilter === "All" ||
-        getStatus(assignment) === statusFilter;
+    return assignments.filter((item) => {
+      const matchesSearch = [
+        item.title,
+        item.description,
+        item.courseCode,
+        item.courseTitle,
+        item.semester,
+      ].some((value) =>
+        String(value || "")
+          .toLowerCase()
+          .includes(query)
+      );
 
       const matchesCourse =
         courseFilter === "All" ||
-        assignment.course === courseFilter;
+        item.courseId === courseFilter;
 
-      return matchesSearch && matchesStatus && matchesCourse;
+      const matchesStatus =
+        statusFilter === "All" ||
+        getStatus(item) === statusFilter;
+
+      return (
+        matchesSearch &&
+        matchesCourse &&
+        matchesStatus
+      );
     });
-  }, [assignments, search, statusFilter, courseFilter, today]);
+  }, [
+    assignments,
+    search,
+    courseFilter,
+    statusFilter,
+  ]);
+
+  // ========================================
+  // STATISTICS
+  // ========================================
 
   const total = assignments.length;
+
   const pending = assignments.filter(
-    (a) => getStatus(a) === "Pending"
+    (item) =>
+      getStatus(item) === "Pending" &&
+      item.canSubmit
   ).length;
+
   const submitted = assignments.filter(
-    (a) => a.status === "Submitted"
+    (item) =>
+      getStatus(item) === "Submitted"
   ).length;
+
   const graded = assignments.filter(
-    (a) => a.status === "Graded"
+    (item) =>
+      getStatus(item) === "Graded"
   ).length;
-
-  const courseOptions = [...new Set(assignments.map((a) => a.course))];
-
-  const handleSubmission = (event) => {
-    event.preventDefault();
-
-    if (!selectedFile || !selected) return;
-
-    const allowedExtensions = [".pdf", ".doc", ".docx", ".zip"];
-    const filename = selectedFile.name.toLowerCase();
-
-    if (!allowedExtensions.some((ext) => filename.endsWith(ext))) {
-      setSuccess("Please select a PDF, DOC, DOCX, or ZIP file.");
-      return;
-    }
-
-    if (selectedFile.size > 10 * 1024 * 1024) {
-      setSuccess("Maximum file size is 10 MB.");
-      return;
-    }
-
-    if (getStatus(selected) !== "Pending") {
-      setSuccess("This assignment is no longer open for submission.");
-      return;
-    }
-
-    // Local UI demo: this does not upload or store the file.
-    setAssignments((previous) =>
-      previous.map((assignment) =>
-        assignment.id === selected.id
-          ? { ...assignment, status: "Submitted" }
-          : assignment
-      )
-    );
-
-    setSelected(null);
-    setSelectedFile(null);
-    setSuccess(
-      "Demo submission recorded in this page only. No file has been uploaded."
-    );
-  };
 
   const summaryCards = [
-    { title: "Total Assignments", value: total, icon: FileText },
-    { title: "Pending", value: pending, icon: Clock3 },
-    { title: "Submitted", value: submitted, icon: CheckCircle2 },
-    { title: "Graded", value: graded, icon: Award },
+    {
+      title: "Total Assignments",
+      value: loading || error ? "—" : total,
+      icon: FileText,
+    },
+    {
+      title: "Pending",
+      value: loading || error ? "—" : pending,
+      icon: Clock3,
+    },
+    {
+      title: "Submitted",
+      value: loading || error ? "—" : submitted,
+      icon: CheckCircle2,
+    },
+    {
+      title: "Graded",
+      value: loading || error ? "—" : graded,
+      icon: Award,
+    },
   ];
+
+  // ========================================
+  // SUBMIT / RESUBMIT
+  // ========================================
+
+  async function handleSubmission(event) {
+    event.preventDefault();
+
+    if (
+      !selected ||
+      !selected.canSubmit ||
+      submitting
+    ) {
+      return;
+    }
+
+    const text = submissionText.trim();
+    const url = submissionUrl.trim();
+
+    if (!text && !url) {
+      setModalError(
+        "Provide submission text or a document link."
+      );
+      return;
+    }
+
+    if (
+      text.length > 20000 ||
+      url.length > 2048
+    ) {
+      setModalError(
+        "Submission content exceeds the allowed length."
+      );
+      return;
+    }
+
+    if (url) {
+      try {
+        const parsed = new URL(url);
+
+        if (
+          !["http:", "https:"].includes(
+            parsed.protocol
+          )
+        ) {
+          throw new Error("Invalid URL.");
+        }
+      } catch {
+        setModalError(
+          "Enter a valid HTTP or HTTPS document URL."
+        );
+        return;
+      }
+    }
+
+    setSubmitting(true);
+    setModalError("");
+
+    try {
+      const result = await request(
+        `/student/${encodeURIComponent(
+          selected.id
+        )}/submit`,
+        {
+          method: "POST",
+          body: {
+            submissionText: text,
+            submissionUrl: url,
+          },
+        }
+      );
+
+      // Reload the authoritative
+      // assignment and submission state.
+      const refreshed = await request(
+        "/student/my"
+      );
+
+      if (!Array.isArray(refreshed.data)) {
+        throw new Error(
+          "Submission succeeded, but the refreshed assignment list was invalid."
+        );
+      }
+
+      setAssignments(
+        refreshed.data.map(
+          normalizeAssignment
+        )
+      );
+
+      setStudent(refreshed.student || null);
+
+      setSelectedId("");
+      setSubmissionText("");
+      setSubmissionUrl("");
+
+      setSuccess(
+        result.message ||
+        "Assignment submitted successfully."
+      );
+
+      setError("");
+    } catch (err) {
+      setModalError(err.message);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  // ========================================
+  // RENDER
+  // ========================================
 
   return (
     <div className="space-y-8">
-      {/* Header */}
-      <div>
-        <p className="mb-2 text-xs font-bold tracking-[0.16em] text-[#B18B37]">
-          STUDENT ACADEMICS
-        </p>
 
-        <h1 className="text-3xl font-extrabold text-[#234E43] md:text-4xl">
-          My Assignments
-        </h1>
+      {/* PAGE HEADER */}
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <p className="mb-2 text-xs font-bold tracking-[0.16em] text-[#B18B37]">
+            STUDENT ACADEMICS
+          </p>
 
-        <p className="mt-3 text-[#718579]">
-          Stay organized, monitor deadlines, review feedback,
-          and manage your academic tasks.
-        </p>
+          <h1 className="text-3xl font-extrabold text-[#234E43] md:text-4xl">
+            My Assignments
+          </h1>
+
+          <p className="mt-3 text-[#718579]">
+            Stay organized, monitor deadlines,
+            submit your work, and review faculty feedback.
+          </p>
+
+          {student && (
+            <p className="mt-2 text-sm font-medium text-[#45685B]">
+              {student.name || "Student"}
+              {student.studentId
+                ? ` · ${student.studentId}`
+                : ""}
+            </p>
+          )}
+        </div>
+
+        <button
+          type="button"
+          onClick={refresh}
+          disabled={loading || submitting}
+          className="inline-flex items-center gap-2 rounded-xl border border-[#E2EADC] bg-white px-4 py-3 text-sm font-semibold text-[#234E43] hover:bg-slate-50 disabled:opacity-50"
+        >
+          <RefreshCw
+            size={17}
+            className={
+              loading ? "animate-spin" : ""
+            }
+          />
+          Refresh
+        </button>
       </div>
 
-      {/* Summary */}
+      {/* LOADING */}
+      {loading && (
+        <div
+          role="status"
+          className="flex items-center gap-3 rounded-2xl bg-[#F1F7EF] p-5 text-sm text-[#234E43]"
+        >
+          <Loader2
+            size={20}
+            className="animate-spin"
+          />
+          Loading assignments from MongoDB...
+        </div>
+      )}
+
+      {/* ERROR */}
+      {error && (
+        <div
+          role="alert"
+          className="flex items-start gap-3 rounded-2xl border border-red-200 bg-red-50 p-5 text-sm text-red-700"
+        >
+          <AlertCircle
+            size={20}
+            className="shrink-0"
+          />
+          {error}
+        </div>
+      )}
+
+      {/* SUCCESS */}
+      {success && (
+        <div
+          role="status"
+          className="flex items-center gap-3 rounded-2xl border border-emerald-200 bg-emerald-50 p-5 text-sm text-emerald-700"
+        >
+          <CheckCircle2
+            size={20}
+            className="shrink-0"
+          />
+          {success}
+        </div>
+      )}
+
+      {/* SUMMARY CARDS */}
       <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-4">
-        {summaryCards.map((card) => {
-          const Icon = card.icon;
-
-          return (
-            <div
-              key={card.title}
-              className="rounded-2xl border border-[#E2EADC] bg-white p-6 shadow-sm"
-            >
-              <div className="mb-5 flex h-12 w-12 items-center justify-center rounded-xl bg-[#EAF2E8] text-[#234E43]">
-                <Icon size={24} />
-              </div>
-
-              <p className="text-sm text-[#718579]">{card.title}</p>
-
-              <h2 className="mt-2 text-3xl font-extrabold text-[#234E43]">
-                {card.value}
-              </h2>
-            </div>
-          );
-        })}
+        {summaryCards.map((card) => (
+          <SummaryCard
+            key={card.title}
+            {...card}
+          />
+        ))}
       </div>
 
-      {/* Search and Filters */}
+      {/* SEARCH AND FILTERS */}
       <div className="rounded-2xl border border-[#E2EADC] bg-white p-5">
         <div className="flex flex-col gap-4 lg:flex-row">
           <div className="relative flex-1">
@@ -269,161 +717,203 @@ function StudentAssignments() {
             <input
               type="search"
               value={search}
-              onChange={(event) => setSearch(event.target.value)}
+              onChange={(event) =>
+                setSearch(event.target.value)
+              }
               placeholder="Search assignments..."
+              aria-label="Search assignments"
               className="w-full rounded-xl border border-[#E2EADC] bg-[#F9FBF8] py-3.5 pl-12 pr-4 text-sm text-[#234E43] outline-none"
             />
           </div>
 
           <select
             value={courseFilter}
-            onChange={(e) => setCourseFilter(e.target.value)}
+            onChange={(event) =>
+              setCourseFilter(event.target.value)
+            }
             aria-label="Filter by course"
             className="rounded-xl border border-[#E2EADC] bg-white px-4 py-3 text-sm text-[#45685B]"
           >
-            <option value="All">All Courses</option>
+            <option value="All">
+              All Courses
+            </option>
+
             {courseOptions.map((course) => (
-              <option key={course} value={course}>
-                {course}
+              <option
+                key={course.id}
+                value={course.id}
+              >
+                {course.code} — {course.title}
               </option>
             ))}
           </select>
 
           <select
             value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value)}
-            aria-label="Filter by assignment status"
+            onChange={(event) =>
+              setStatusFilter(event.target.value)
+            }
+            aria-label="Filter assignment status"
             className="rounded-xl border border-[#E2EADC] bg-white px-4 py-3 text-sm text-[#45685B]"
           >
-            {["All", "Pending", "Submitted", "Graded", "Overdue"].map(
-              (status) => (
-                <option key={status} value={status}>
-                  {status === "All" ? "All Status" : status}
-                </option>
-              )
-            )}
+            {[
+              "All",
+              "Pending",
+              "Submitted",
+              "Graded",
+              "Overdue",
+              "Closed",
+            ].map((status) => (
+              <option
+                key={status}
+                value={status}
+              >
+                {status === "All"
+                  ? "All Status"
+                  : status}
+              </option>
+            ))}
           </select>
         </div>
 
         <p className="mt-4 text-sm text-[#718579]">
-          Showing {filtered.length} of {total} assignments
+          Showing {filtered.length} of{" "}
+          {total} assignments
         </p>
       </div>
 
-      {/* Assignment Cards */}
-      <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-3">
-        {filtered.map((assignment) => {
-          const status = getStatus(assignment);
+      {/* ASSIGNMENT CARDS */}
+      {!loading && !error && (
+        <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-3">
+          {filtered.map((assignment) => {
+            const status = getStatus(assignment);
 
-          return (
-            <article
-              key={assignment.id}
-              className="flex flex-col rounded-3xl border border-[#E2EADC] bg-white p-6 shadow-sm transition-all duration-300 hover:-translate-y-1 hover:shadow-xl hover:shadow-[#234E43]/10"
-            >
-              <div className="mb-6 flex items-start justify-between gap-3">
-                <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-[#EAF2E8]">
-                  <FileText size={24} className="text-[#234E43]" />
-                </div>
-
-                <span
-                  className={`rounded-full px-3 py-1.5 text-xs font-bold ${
-                    statusStyles[status]
-                  }`}
-                >
-                  {status}
-                </span>
-              </div>
-
-              <p className="text-xs font-bold text-[#B18B37]">
-                {assignment.code}
-              </p>
-
-              <h3 className="mt-2 text-xl font-bold text-[#234E43]">
-                {assignment.title}
-              </h3>
-
-              <p className="mt-2 text-sm text-[#718579]">
-                {assignment.course}
-              </p>
-
-              <div className="mt-6 space-y-3 text-sm text-[#607B6C]">
-                <div className="flex items-center gap-2">
-                  <CalendarDays size={17} />
-                  Due: {assignment.deadline}
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <Award size={17} />
-                  Total Marks: {assignment.marks}
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <BookOpen size={17} />
-                  {assignment.instructor}
-                </div>
-              </div>
-
-              {status === "Graded" && (
-                <div className="mt-5 rounded-xl bg-[#EAF2E8] p-4">
-                  <p className="text-sm font-semibold text-[#234E43]">
-                    Your Grade: {assignment.obtained}/{assignment.marks}
-                  </p>
-                </div>
-              )}
-
-              <button
-                type="button"
-                onClick={() => {
-                  setSelected(assignment);
-                  setSelectedFile(null);
-                  setSuccess("");
-                }}
-                className="mt-auto flex w-full items-center justify-center gap-2 rounded-xl bg-[#234E43] px-4 py-3.5 font-semibold text-white transition hover:bg-[#326657] pt-4"
+            return (
+              <article
+                key={assignment.id}
+                className="flex flex-col rounded-3xl border border-[#E2EADC] bg-white p-6 shadow-sm transition-all duration-300 hover:-translate-y-1 hover:shadow-xl hover:shadow-[#234E43]/10"
               >
-                View Details
-                <ArrowUpRight size={18} />
-              </button>
-            </article>
-          );
-        })}
-      </div>
+                <div className="mb-6 flex items-start justify-between gap-3">
+                  <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-[#EAF2E8]">
+                    <FileText
+                      size={24}
+                      className="text-[#234E43]"
+                    />
+                  </div>
 
-      {filtered.length === 0 && (
-        <div className="rounded-2xl border border-[#E2EADC] bg-white p-12 text-center">
-          <Search size={35} className="mx-auto text-[#A6C1A4]" />
-          <p className="mt-4 font-semibold text-[#234E43]">
-            No matching assignments found.
-          </p>
+                  <StatusBadge status={status} />
+                </div>
+
+                <p className="text-xs font-bold text-[#B18B37]">
+                  {assignment.courseCode}
+                </p>
+
+                <h3 className="mt-2 text-xl font-bold text-[#234E43]">
+                  {assignment.title}
+                </h3>
+
+                <p className="mt-2 text-sm text-[#718579]">
+                  {assignment.courseTitle}
+                </p>
+
+                <div className="mt-6 space-y-3 text-sm text-[#607B6C]">
+                  <div className="flex items-center gap-2">
+                    <CalendarDays size={17} />
+                    Due: {formatDate(
+                      assignment.deadline
+                    )}
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <Award size={17} />
+                    Total Marks: {assignment.marks}
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <BookOpen size={17} />
+                    {assignment.semester}
+                  </div>
+                </div>
+
+                {status === "Graded" && (
+                  <div className="mt-5 rounded-xl bg-[#EAF2E8] p-4">
+                    <p className="text-sm font-semibold text-[#234E43]">
+                      Your Grade:{" "}
+                      {assignment.mySubmission.obtainedMarks}
+                      /{assignment.marks}
+                    </p>
+                  </div>
+                )}
+
+                {status === "Submitted" && (
+                  <div className="mt-5 flex items-center gap-2 rounded-xl bg-[#E8EFF8] p-4 text-sm text-[#456A94]">
+                    <CheckCircle2 size={18} />
+                    Submitted — Awaiting Faculty Review
+                  </div>
+                )}
+
+                <button
+                  type="button"
+                  onClick={() =>
+                    openDetails(assignment)
+                  }
+                  className="mt-6 flex w-full items-center justify-center gap-2 rounded-xl bg-[#234E43] px-4 py-3.5 font-semibold text-white transition hover:bg-[#326657]"
+                >
+                  View Details
+                  <ArrowUpRight size={18} />
+                </button>
+              </article>
+            );
+          })}
         </div>
       )}
 
-      {/* Feedback Message */}
-      {success && !selected && (
-        <div
-          role="status"
-          className="rounded-xl border border-[#DCE8DA] bg-[#F1F7EF] p-4 text-sm text-[#234E43]"
-        >
-          {success}
-        </div>
-      )}
+      {/* EMPTY STATE */}
+      {!loading &&
+        !error &&
+        filtered.length === 0 && (
+          <div className="rounded-2xl border border-[#E2EADC] bg-white p-12 text-center">
+            <Search
+              size={35}
+              className="mx-auto text-[#A6C1A4]"
+            />
 
-      {/* Assignment Details Modal */}
+            <p className="mt-4 font-semibold text-[#234E43]">
+              {assignments.length === 0
+                ? "No published assignments found for your approved courses."
+                : "No assignments match your filters."}
+            </p>
+
+            <p className="mt-2 text-sm text-[#718579]">
+              Faculty-published assignments
+              will appear here automatically
+              when you refresh.
+            </p>
+          </div>
+        )}
+
+      {/* ASSIGNMENT DETAILS MODAL */}
       {selected && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
-          onClick={() => setSelected(null)}
+          onMouseDown={(event) => {
+            if (
+              event.target === event.currentTarget
+            ) {
+              closeDetails();
+            }
+          }}
         >
           <div
             role="dialog"
             aria-modal="true"
             aria-labelledby="assignment-title"
             className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-3xl bg-white p-7 shadow-2xl"
-            onClick={(event) => event.stopPropagation()}
           >
             <div className="flex items-start justify-between gap-4">
               <div>
                 <p className="text-xs font-bold text-[#B18B37]">
-                  {selected.code}
+                  {selected.courseCode}
                 </p>
 
                 <h2
@@ -432,111 +922,281 @@ function StudentAssignments() {
                 >
                   {selected.title}
                 </h2>
+
+                <div className="mt-3">
+                  <StatusBadge
+                    status={getStatus(selected)}
+                  />
+                </div>
               </div>
 
               <button
-                onClick={() => setSelected(null)}
+                type="button"
+                onClick={closeDetails}
+                disabled={submitting}
                 aria-label="Close assignment details"
-                className="rounded-lg p-2 text-[#718579] hover:bg-[#F1F7EF]"
+                className="rounded-lg p-2 text-[#718579] hover:bg-[#F1F7EF] disabled:opacity-50"
               >
                 <X size={22} />
               </button>
             </div>
 
+            {/* DETAILS */}
             <div className="mt-6 grid gap-4 rounded-xl bg-[#F6F8F3] p-5 text-sm text-[#45685B] sm:grid-cols-2">
-              <p><strong>Course:</strong> {selected.course}</p>
-              <p><strong>Instructor:</strong> {selected.instructor}</p>
-              <p><strong>Deadline:</strong> {selected.deadline}</p>
-              <p><strong>Total Marks:</strong> {selected.marks}</p>
+              <p>
+                <strong>Course:</strong>{" "}
+                {selected.courseTitle}
+              </p>
+
+              <p>
+                <strong>Semester:</strong>{" "}
+                {selected.semester}
+              </p>
+
+              <p>
+                <strong>Deadline:</strong>{" "}
+                {formatDate(selected.deadline)}
+              </p>
+
+              <p>
+                <strong>Total Marks:</strong>{" "}
+                {selected.marks}
+              </p>
             </div>
 
+            {/* INSTRUCTIONS */}
             <h3 className="mt-7 font-bold text-[#234E43]">
               Assignment Instructions
             </h3>
 
-            <p className="mt-3 leading-relaxed text-[#718579]">
+            <p className="mt-3 whitespace-pre-wrap break-words leading-relaxed text-[#718579]">
               {selected.description}
             </p>
 
-            {selected.status === "Graded" && (
-              <div className="mt-6 rounded-xl bg-[#EAF2E8] p-5">
+            {/* SAVED SUBMISSION */}
+            {selected.mySubmission && (
+              <div className="mt-7 rounded-xl border border-[#DCE8DA] bg-[#F9FBF8] p-5">
                 <h3 className="flex items-center gap-2 font-bold text-[#234E43]">
-                  <MessageSquare size={18} />
-                  Faculty Feedback
+                  <ClipboardCheck size={19} />
+                  Your Submission
                 </h3>
 
-                <p className="mt-3 text-sm text-[#45685B]">
-                  {selected.feedback}
+                <p className="mt-2 text-xs text-[#718579]">
+                  Submitted:{" "}
+                  {formatDateTime(
+                    selected.mySubmission.submittedAt
+                  )}
                 </p>
 
-                <p className="mt-3 font-bold text-[#234E43]">
-                  Marks: {selected.obtained}/{selected.marks}
+                {selected.mySubmission.submissionText && (
+                  <p className="mt-4 whitespace-pre-wrap break-words text-sm leading-7 text-[#45685B]">
+                    {selected.mySubmission.submissionText}
+                  </p>
+                )}
+
+                {selected.mySubmission.submissionUrl && (
+                  <a
+                    href={
+                      selected.mySubmission.submissionUrl
+                    }
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="mt-4 inline-flex items-center gap-2 break-all text-sm font-semibold text-[#477764] underline"
+                  >
+                    <ExternalLink size={16} />
+                    Open Submitted Document
+                  </a>
+                )}
+              </div>
+            )}
+
+            {/* GRADE AND FEEDBACK */}
+            {selected.mySubmission?.status ===
+              "Graded" && (
+              <div className="mt-6 rounded-xl bg-[#EAF2E8] p-5">
+                <h3 className="flex items-center gap-2 font-bold text-[#234E43]">
+                  <Award size={19} />
+                  Faculty Grade
+                </h3>
+
+                <p className="mt-4 text-xl font-extrabold text-[#234E43]">
+                  {
+                    selected.mySubmission
+                      .obtainedMarks
+                  }
+                  /{selected.marks}
+                </p>
+
+                <h4 className="mt-5 flex items-center gap-2 text-sm font-bold text-[#234E43]">
+                  <MessageSquare size={17} />
+                  Faculty Feedback
+                </h4>
+
+                <p className="mt-2 whitespace-pre-wrap break-words text-sm leading-7 text-[#45685B]">
+                  {selected.mySubmission.feedback ||
+                    "No written feedback provided."}
+                </p>
+
+                <p className="mt-3 text-xs text-[#718579]">
+                  Graded:{" "}
+                  {formatDateTime(
+                    selected.mySubmission.gradedAt
+                  )}
                 </p>
               </div>
             )}
 
-            {getStatus(selected) === "Pending" && (
-              <form onSubmit={handleSubmission} className="mt-7">
-                <h3 className="mb-4 font-bold text-[#234E43]">
-                  Submit Your Assignment
+            {/* SUBMISSION FORM */}
+            {selected.canSubmit && (
+              <form
+                onSubmit={handleSubmission}
+                className="mt-7 space-y-4 border-t border-[#E2EADC] pt-6"
+              >
+                <h3 className="font-bold text-[#234E43]">
+                  {selected.mySubmission
+                    ? "Update Your Submission"
+                    : "Submit Your Assignment"}
                 </h3>
 
-                <label className="flex cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed border-[#A6C1A4] bg-[#F9FBF8] px-6 py-9 text-center">
-                  <UploadCloud size={32} className="text-[#477764]" />
+                <p className="text-sm text-[#718579]">
+                  Provide submission text, a document
+                  link, or both. The deadline is based
+                  on Bangladesh local date.
+                </p>
 
-                  <span className="mt-3 font-semibold text-[#234E43]">
-                    Choose assignment file
-                  </span>
+                <div>
+                  <label
+                    htmlFor="submission-text"
+                    className="mb-2 block text-sm font-semibold text-[#45685B]"
+                  >
+                    Submission Text
+                  </label>
 
-                  <span className="mt-2 text-xs text-[#718579]">
-                    PDF, DOC, DOCX or ZIP — Max 10 MB
-                  </span>
+                  <textarea
+                    id="submission-text"
+                    rows={5}
+                    maxLength={20000}
+                    value={submissionText}
+                    onChange={(event) =>
+                      setSubmissionText(
+                        event.target.value
+                      )
+                    }
+                    placeholder="Write your assignment response..."
+                    className="w-full resize-y rounded-xl border border-[#E2EADC] bg-[#F9FBF8] p-4 text-sm outline-none focus:border-[#A6C1A4]"
+                  />
+                </div>
+
+                <div>
+                  <label
+                    htmlFor="submission-url"
+                    className="mb-2 flex items-center gap-2 text-sm font-semibold text-[#45685B]"
+                  >
+                    <Link2 size={16} />
+                    Document Link (Optional)
+                  </label>
 
                   <input
-                    type="file"
-                    accept=".pdf,.doc,.docx,.zip"
+                    id="submission-url"
+                    type="url"
+                    maxLength={2048}
+                    value={submissionUrl}
                     onChange={(event) =>
-                      setSelectedFile(event.target.files?.[0] || null)
+                      setSubmissionUrl(
+                        event.target.value
+                      )
                     }
-                    className="sr-only"
+                    placeholder="https://drive.google.com/..."
+                    className="w-full rounded-xl border border-[#E2EADC] bg-[#F9FBF8] p-4 text-sm outline-none focus:border-[#A6C1A4]"
                   />
-                </label>
 
-                {selectedFile && (
-                  <p className="mt-4 flex items-center gap-2 text-sm text-[#45685B]">
-                    <Paperclip size={17} />
-                    {selectedFile.name}
+                  <p className="mt-2 text-xs text-[#718579]">
+                    Upload your document to a service
+                    you trust and paste its sharing link.
+                    Check that your Faculty can access it.
                   </p>
-                )}
+                </div>
 
-                {success && (
-                  <p className="mt-4 text-sm text-red-700">{success}</p>
+                {modalError && (
+                  <p
+                    role="alert"
+                    className="flex items-start gap-2 rounded-xl bg-red-50 p-4 text-sm text-red-700"
+                  >
+                    <AlertCircle
+                      size={18}
+                      className="shrink-0"
+                    />
+                    {modalError}
+                  </p>
                 )}
 
                 <button
                   type="submit"
-                  disabled={!selectedFile}
-                  className="mt-5 w-full rounded-xl bg-[#D9A536] px-5 py-3.5 font-bold text-[#234E43] transition hover:bg-[#E7B84E] disabled:cursor-not-allowed disabled:opacity-50"
+                  disabled={
+                    submitting ||
+                    (!submissionText.trim() &&
+                      !submissionUrl.trim())
+                  }
+                  className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#D9A536] px-5 py-3.5 font-bold text-[#234E43] transition hover:bg-[#E7B84E] disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  <span className="flex items-center justify-center gap-2">
-                    <UploadCloud size={19} />
-                    Simulate Submission
-                  </span>
+                  {submitting ? (
+                    <Loader2
+                      size={19}
+                      className="animate-spin"
+                    />
+                  ) : (
+                    <Send size={19} />
+                  )}
+
+                  {submitting
+                    ? "Submitting..."
+                    : selected.mySubmission
+                    ? "Update Submission"
+                    : "Submit Assignment"}
                 </button>
               </form>
             )}
 
-            {selected.status === "Submitted" && (
-              <div className="mt-7 rounded-xl bg-[#E8EFF8] p-5 text-sm text-[#456A94]">
-                <CheckCircle2 size={20} className="mb-2" />
-                Demo submission recorded. Awaiting faculty review.
-              </div>
-            )}
+            {/* SUBMITTED / OVERDUE / CLOSED */}
+            {!selected.canSubmit &&
+              selected.mySubmission?.status ===
+                "Submitted" && (
+                <div className="mt-7 rounded-xl bg-[#E8EFF8] p-5 text-sm text-[#456A94]">
+                  <CheckCircle2
+                    size={20}
+                    className="mb-2"
+                  />
+                  Your submission is saved in MongoDB.
+                  It is awaiting Faculty review or
+                  can no longer be edited.
+                </div>
+              )}
+
+            {!selected.canSubmit &&
+              !selected.mySubmission && (
+                <div className="mt-7 flex items-start gap-3 rounded-xl bg-amber-50 p-5 text-sm text-amber-800">
+                  <AlertCircle
+                    size={20}
+                    className="shrink-0"
+                  />
+
+                  <span>
+                    This assignment is no longer
+                    open for submission.
+                    {selected.isOverdue
+                      ? " The deadline has passed."
+                      : ""}
+                  </span>
+                </div>
+              )}
           </div>
         </div>
       )}
+
+      {/* FOOTER */}
+      <p className="border-t border-[#E2EADC] pt-5 text-xs text-[#8A9F90]">
+        UniBee Student Portal — MongoDB Assignments
+      </p>
     </div>
   );
 }
-
-export default StudentAssignments;
